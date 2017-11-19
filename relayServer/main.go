@@ -23,7 +23,8 @@ type Pool struct {
 }
 
 type Ipc struct {
-	DataQueue       chan []byte // Data channel
+	DataC2SQueue    chan []byte // Data channel Client to Server
+	DataS2CQueue    chan []byte // Data channel Server to Client
 	ServerCtrlQueue chan int    // Control channel
 	ClientCtrlQueue chan int    // Control channel
 }
@@ -94,45 +95,13 @@ func startServer() {
 		remoteAddr := conn.RemoteAddr()
 		log.Println("Relay Server connected, from addr: ", remoteAddr.String())
 		ipc := Ipc{
-			DataQueue:       make(chan []byte),
+			DataS2CQueue:    make(chan []byte),
+			DataC2SQueue:    make(chan []byte),
 			ServerCtrlQueue: make(chan int),
 			ClientCtrlQueue: make(chan int),
 		}
 
 		go ClientHandler(conn, ipc)
-	}
-}
-
-// Using TCPListener to have SetDeadLine feature
-func relayServer(ipc Ipc, l *net.TCPListener) {
-
-	for {
-		conn, err := l.Accept()
-
-		if err != nil {
-
-			select {
-			case ctrl := <-ipc.ServerCtrlQueue:
-				log.Printf("ServerCtrlQueue: [%d]", ctrl)
-				if ctrl == CtrlStopAccept {
-					log.Println("Control: quit")
-					return
-				}
-			default:
-			}
-
-			// Accept is always blocking, workarounds are:
-			// 1. Close the Listener
-			// 2. Set dead lines
-			l.SetDeadline(time.Now().Add(1 * time.Second))
-
-			continue
-		}
-
-		remoteAddr := conn.RemoteAddr()
-		log.Println("Relay Client connected, from addr: ", remoteAddr.String())
-
-		go relayServerHandler(conn, ipc)
 	}
 }
 
@@ -181,7 +150,7 @@ func ClientHandler(c net.Conn, ipc Ipc) {
 	buf := make([]byte, GlobalConfig.NetBufferSize)
 	for {
 		select {
-		case out := <-ipc.DataQueue:
+		case out := <-ipc.DataC2SQueue:
 			w, err := c.Write(out)
 			if err != nil {
 				log.Printf("ClientHandler\t Write error: [%v]", err)
@@ -202,7 +171,7 @@ func ClientHandler(c net.Conn, ipc Ipc) {
 				goto terminated
 			}
 
-			ipc.DataQueue <- buf
+			ipc.DataS2CQueue <- buf
 		}
 
 	}
@@ -219,6 +188,39 @@ terminated:
 	// log.Println("ClientHandler\t terminated")
 
 	return
+}
+
+// Using TCPListener to have SetDeadLine feature
+func relayServer(ipc Ipc, l *net.TCPListener) {
+
+	for {
+		conn, err := l.Accept()
+
+		if err != nil {
+
+			select {
+			case ctrl := <-ipc.ServerCtrlQueue:
+				log.Printf("ServerCtrlQueue: [%d]", ctrl)
+				if ctrl == CtrlStopAccept {
+					log.Println("Control: quit")
+					return
+				}
+			default:
+			}
+
+			// Accept is always blocking, workarounds are:
+			// 1. Close the Listener
+			// 2. Set dead lines
+			l.SetDeadline(time.Now().Add(1 * time.Second))
+
+			continue
+		}
+
+		remoteAddr := conn.RemoteAddr()
+		log.Println("Relay Client connected, from addr: ", remoteAddr.String())
+
+		go relayServerHandler(conn, ipc)
+	}
 }
 
 // Implements a handler for relayServer
@@ -238,10 +240,10 @@ func relayServerHandler(c net.Conn, ipc Ipc) {
 			goto terminated
 		}
 
-		ipc.DataQueue <- buf
+		ipc.DataC2SQueue <- buf
 
 		select {
-		case out := <-ipc.DataQueue:
+		case out := <-ipc.DataS2CQueue:
 			n, err := c.Write(out)
 			if err != nil {
 				log.Printf("relayServerHandler\t Write error: [%v]", err)
@@ -266,6 +268,9 @@ terminated:
 	close(ipc.ClientCtrlQueue)
 	close(ipc.ServerCtrlQueue)
 	c.Close()
+	// close(ipc.DataC2SQueue)
+	// close(ipc.DataS2CQueue)
+
 	return
 }
 

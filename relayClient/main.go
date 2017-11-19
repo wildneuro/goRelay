@@ -40,7 +40,7 @@ func CheckError(err error) {
 func StartServer(c Config) {
 	addr := fmt.Sprintf("%s:%d", c.RelayHost, c.RelayPort)
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.DialTCP("tcp", addr)
 	CheckError(err)
 
 	defer conn.Close()
