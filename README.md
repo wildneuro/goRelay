@@ -2,9 +2,9 @@
 
 This program is a demo program on how relay may be designed in a simplest way
 
-## Getting Started
+## Flow chart
 
-No dependencies
+![FlowChartDiagram Image here](https://github.com/wildneuro/goRelay/docs/goRelay.png "goRelay Diagram")
 
 ### Prerequisites
 
