@@ -1,0 +1,36 @@
+@startuml
+
+title ** Relay Server/Client flow **
+
+actor alienClient
+box "Server"
+    entity relayClient
+    entity relayServer
+end box
+
+autonumber
+
+== Starting a new Relay Server ==
+
+relayServer	    ->	  relayServer       :	Checking starting params (PORT0, e.g. RELAYING_PORT_RANGE)
+relayServer	    ->	  relayServer       :	Binding a listenHostAndPort
+relayServer	    ->	  relayServer       :	Listening for incoming connections
+
+== Establishing phase: a new connection from relayClient to relayServer ==
+
+relayClient	    ->	  relayServer  :	Connect to IP:PORT0 ; (CONN_ID_1000)
+relayClient	    <-	  relayServer  :	ACK
+relayServer	    ->	  relayServer  :	BridgeUp: Spawn a new sub-routine to listen on next available PORT1 (from RELAYING_PORT_RANGE)
+
+== Working phase: a new connection and data flow from alienClient to relayServer ==
+
+alienClient	    ->	  relayServer  :	Connect to IP:PORT1 ; (CONN_ID_1001)
+alienClient	    <-	  relayServer  :	ACK
+alienClient	    ->	  relayServer  :	Send Data to CONN_ID_1001
+relayClient	    <-	  relayServer  :	Send Data to CONN_ID_1000
+relayClient	    ->	  relayServer  :	Recv Data from CONN_ID_1000
+alienClient	    <-	  relayServer  :	Send Data to CONN_ID_1001
+
+== Ending the session ==
+
+@enduml
