@@ -70,14 +70,15 @@ func relayServer() {
 
 func clientServer(connServer net.Conn) {
 
-	addr := fmt.Sprintf("%s:%d", GlobalConfig.ListenHost, 20000)
+	port := GetNextPort(20000)
+	addr := fmt.Sprintf("%s:%d", GlobalConfig.ListenHost, port)
 
 	l, err := net.Listen("tcp", addr)
 	CheckError(err)
 
 	defer l.Close()
 
-	log.Println("clientServer is running...")
+	log.Printf("clientServer is running on port: %d", port)
 
 	for {
 		connClient, err := l.Accept()
@@ -88,6 +89,8 @@ func clientServer(connServer net.Conn) {
 
 		go clientHandler(connClient, connServer)
 	}
+
+	connServer.Close()
 }
 
 func netMixer(conn1 net.Conn, conn2 net.Conn, wg *sync.WaitGroup) {
@@ -98,9 +101,11 @@ func netMixer(conn1 net.Conn, conn2 net.Conn, wg *sync.WaitGroup) {
 	input.Split(bufio.ScanBytes)
 
 	for input.Scan() {
-		conn2.Write(input.Bytes())
+		if _, err := conn2.Write(input.Bytes()); err != nil {
+			log.Printf("network error: [%v] on [%s]", err, conn2.RemoteAddr().String())
+			return
+		}
 	}
-
 }
 
 func clientHandler(connClient net.Conn, connServer net.Conn) {
@@ -118,9 +123,15 @@ func clientHandler(connClient net.Conn, connServer net.Conn) {
 	wg.Wait()
 
 	connClient.Close()
-	connServer.Close()
 
 	return
+}
+
+func GetNextPort(port int) int {
+	if port > 65000 {
+		port = 0
+	}
+	return port + 1
 }
 
 // Main function
