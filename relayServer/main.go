@@ -90,7 +90,9 @@ func clientServer(connServer net.Conn) {
 	}
 }
 
-func netMixer(conn1 net.Conn, conn2 net.Conn) {
+func netMixer(conn1 net.Conn, conn2 net.Conn, wg *sync.WaitGroup) {
+
+	defer wg.Done()
 
 	input := bufio.NewScanner(conn1)
 	input.Split(bufio.ScanBytes)
@@ -98,6 +100,7 @@ func netMixer(conn1 net.Conn, conn2 net.Conn) {
 	for input.Scan() {
 		conn2.Write(input.Bytes())
 	}
+
 }
 
 func clientHandler(connClient net.Conn, connServer net.Conn) {
@@ -106,14 +109,16 @@ func clientHandler(connClient net.Conn, connServer net.Conn) {
 		wg sync.WaitGroup
 	)
 
-	go netMixer(connServer, connClient)
-	go netMixer(connClient, connServer)
+	wg.Add(1)
+	go netMixer(connServer, connClient, &wg)
 
 	wg.Add(1)
+	go netMixer(connClient, connServer, &wg)
 
 	wg.Wait()
 
 	connClient.Close()
+	connServer.Close()
 
 	return
 }
