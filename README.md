@@ -4,7 +4,7 @@ This program is a demo program on how relay may be designed in a simplest way
 
 ## Flow chart
 
-![FlowChartDiagram Image here](https://github.com/wildneuro/goRelay/docs/goRelay.png "goRelay Diagram")
+![FlowChartDiagram Image here](https://github.com/wildneuro/goRelay/blob/master/docs/goRelay.png "goRelay Diagram")
 
 ### Prerequisites
 
