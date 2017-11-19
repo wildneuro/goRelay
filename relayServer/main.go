@@ -1,11 +1,13 @@
+// relayServer, for built simplification, this file contains all method and not being split into packages.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"sync"
+	"time"
 )
 
 type Config struct {
@@ -20,40 +22,62 @@ type Pool struct {
 	NextPort int
 }
 
-var GlobalConfig = Config{}
-var mutexPortsPool = &sync.Mutex{}
-var pool = Pool{}
+type Ipc struct {
+	DataQueue       chan []byte // Data channel
+	ServerCtrlQueue chan int    // Control channel
+	ClientCtrlQueue chan int    // Control channel
+}
 
+const (
+	CtrlStopAccept = iota
+	CtrlStopClient
+)
+
+var (
+	GlobalConfig   = Config{}
+	mutexPortsPool = &sync.Mutex{}
+	pool           = Pool{}
+
+	listenHost = flag.String("host", "127.0.0.1", "Listen host")
+	listenPort = flag.Int("port", 10000, "Listen port")
+)
+
+// Initializing
 func Init() {
 	GlobalConfig = Config{
-		ListenHost:    "127.0.0.1",
-		ListenPort:    10000,
+		ListenHost:    *listenHost,
+		ListenPort:    *listenPort,
 		NetBufferSize: 1024,
 		MaxRetries:    5,
 	}
 
 	pool = Pool{
 		ArPorts:  make([]int, 65535),
-		NextPort: 20000,
+		NextPort: 20000, // Starts from port: 20000
 	}
+
+	log.Printf("Listening on Host: [%s:%d]", *listenHost, *listenPort)
 }
 
+// Check error wrapper
 func CheckError(err error) {
 	if err == nil {
 		return
 	}
 
 	log.Printf("Error occuried: [%v]\n", err)
-	os.Exit(1)
+	panic(1)
 }
 
-func main() {
-
-	Init()
-	startServer()
-}
-
+// Start the main server
 func startServer() {
+
+	defer func() {
+		if recover() != nil {
+			log.Println("Houston, we have a panic, recovering")
+		}
+	}()
+
 	addr := fmt.Sprintf("%s:%d", GlobalConfig.ListenHost, GlobalConfig.ListenPort)
 
 	l, err := net.Listen("tcp", addr)
@@ -62,110 +86,190 @@ func startServer() {
 	defer l.Close()
 
 	log.Println("Server is running...")
+
 	for {
 		conn, err := l.Accept()
 		CheckError(err)
 
-		log.Println("...connection attempt")
-		netQueue := make(chan []byte)
+		remoteAddr := conn.RemoteAddr()
+		log.Println("Relay Server connected, from addr: ", remoteAddr.String())
+		ipc := Ipc{
+			DataQueue:       make(chan []byte),
+			ServerCtrlQueue: make(chan int),
+			ClientCtrlQueue: make(chan int),
+		}
 
-		go relayClientHandler(conn, netQueue)
+		go ClientHandler(conn, ipc)
 	}
 }
 
-func relayClientHandler(c net.Conn, nq chan []byte) {
+// Using TCPListener to have SetDeadLine feature
+func relayServer(ipc Ipc, l *net.TCPListener) {
 
-	log.Println("relayClientHandler\t spawned")
-
-	go relayServer(nq)
-
-	buf := make([]byte, GlobalConfig.NetBufferSize)
 	for {
-		select {
-		case out := <-nq:
-			n, err := c.Write(out)
-			log.Printf("relayClientHandler\t Write: [%d]", n)
-			if err != nil {
-				log.Printf("relayClientHandler\t Write error: [%v]", err)
-				c.Close()
-				break
-			}
-		}
+		conn, err := l.Accept()
 
-		n, err := c.Read(buf)
 		if err != nil {
-			log.Printf("relayClientHandler\t Read error: [%v]", err)
-			c.Close()
-			break
+
+			select {
+			case ctrl := <-ipc.ServerCtrlQueue:
+				log.Printf("ServerCtrlQueue: [%d]", ctrl)
+				if ctrl == CtrlStopAccept {
+					log.Println("Control: quit")
+					return
+				}
+			default:
+			}
+
+			// Accept is always blocking, workarounds are:
+			// 1. Close the Listener
+			// 2. Set dead lines
+			l.SetDeadline(time.Now().Add(1 * time.Second))
+
+			continue
 		}
 
-		log.Printf("relayClientHandler\t Read: [%d]", n)
-		nq <- buf
-		log.Printf("relayClientHandler\t Sent to queue")
+		remoteAddr := conn.RemoteAddr()
+		log.Println("Relay Client connected, from addr: ", remoteAddr.String())
 
+		go relayServerHandler(conn, ipc)
 	}
-	c.Close()
-	log.Println("relayClientHandler\t terminated")
 }
 
-func relayServer(nq chan []byte) {
-	retry := GlobalConfig.MaxRetries
+// Implements ClientHandler
+func ClientHandler(c net.Conn, ipc Ipc) {
+
+	var (
+		l         *net.TCPListener
+		errListen error
+	)
+	// log.Println("ClientHandler\t spawned")
+
+	retry := GlobalConfig.MaxRetries // N-attempts to get the next free port
 	for retry > 0 {
 		port := GetPort()
-		addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+		addr := fmt.Sprintf("%s:%d", GlobalConfig.ListenHost, port)
 
-		l, err := net.Listen("tcp", addr)
-		if err == nil {
-			defer l.Close()
-
-			log.Printf("relayServer is running on: [%s]", addr)
-			for {
-				conn, err := l.Accept()
-				CheckError(err)
-
-				go relayServerHandler(conn, nq)
-			}
-			return
+		lAddr, lAddrErr := net.ResolveTCPAddr("tcp", addr)
+		if lAddrErr != nil {
+			log.Panic("Cannot resolve TCP addr: [%s]", addr)
 		}
-		ReleasePort(port)
-		retry--
+
+		l, errListen = net.ListenTCP("tcp", lAddr)
+		defer l.Close()
+
+		l.SetDeadline(time.Now().Add(5 * time.Second))
+
+		if errListen != nil {
+			l.Close()
+
+			ReleasePort(port)
+			retry--
+
+			time.Sleep(100 * time.Millisecond) // Wait before pick the next port
+
+			continue
+		}
+
+		log.Printf("Relay Server is running on: [%s]", addr)
+
+		break
 	}
+
+	go relayServer(ipc, l)
+
+	buf := make([]byte, GlobalConfig.NetBufferSize)
+	for {
+		select {
+		case out := <-ipc.DataQueue:
+			w, err := c.Write(out)
+			if err != nil {
+				log.Printf("ClientHandler\t Write error: [%v]", err)
+				goto terminated
+			}
+			if w <= 0 {
+				log.Printf("ClientHandler\t Write error, 0 bytes sent")
+				goto terminated
+			}
+
+			r, err := c.Read(buf)
+			if err != nil {
+				log.Printf("ClientHandler\t Read error: [%v]", err)
+				goto terminated
+			}
+			if r <= 0 {
+				log.Printf("ClientHandler\t Read error, 0 bytes read")
+				goto terminated
+			}
+
+			ipc.DataQueue <- buf
+		}
+
+	}
+
+	// Rare when labels are ok:
+terminated:
+
+	ipc.ServerCtrlQueue <- CtrlStopAccept // Breaking from Accept loop
+	ipc.ClientCtrlQueue <- CtrlStopClient // Sending 'disconnect' to the relayClient
+
+	l.Close() // Closing Listener
+	c.Close() // Closing the connection
+
+	// log.Println("ClientHandler\t terminated")
+
+	return
 }
 
-func relayServerHandler(c net.Conn, nq chan []byte) {
+// Implements a handler for relayServer
+func relayServerHandler(c net.Conn, ipc Ipc) {
 
-	log.Println("relayServerHandler spawned")
+	// log.Println("relayServerHandler spawned")
 
 	buf := make([]byte, GlobalConfig.NetBufferSize)
 	for {
 		n, err := c.Read(buf)
 		if err != nil {
-			log.Printf("Read error: [%v]", err)
-			c.Close()
-			break
+			log.Printf("relayServerHandler\t Read error: [%v]", err)
+			goto terminated
+		}
+		if n <= 0 {
+			log.Printf("relayServerHandler\t Write error, 0 bytes read")
+			goto terminated
 		}
 
-		log.Printf("relayServerHandler\t Read: [%d]", n)
-		nq <- buf
-		log.Printf("relayServerHandler\t Sent to queue")
+		ipc.DataQueue <- buf
 
-		log.Printf("Waiting for answer")
 		select {
-		case out := <-nq:
+		case out := <-ipc.DataQueue:
 			n, err := c.Write(out)
-			log.Printf("relayServerHandler\t Write: [%d]", n)
 			if err != nil {
 				log.Printf("relayServerHandler\t Write error: [%v]", err)
-				c.Close()
-				break
+				goto terminated
+			}
+			if n <= 0 {
+				log.Printf("relayServerHandler\t Write error, 0 bytes sent")
+				goto terminated
+			}
+		case ctrl := <-ipc.ClientCtrlQueue:
+			log.Printf("ClientCtrlQueue: [%d]", ctrl)
+			if ctrl == CtrlStopClient {
+				log.Println("Control: stop client")
+				goto terminated
 			}
 		}
 
 	}
+
+terminated:
+	// log.Println("relayServerHandler terminated")
+	close(ipc.ClientCtrlQueue)
+	close(ipc.ServerCtrlQueue)
 	c.Close()
-	log.Println("relayServerHandler terminated")
+	return
 }
 
+// GetPort helps to get the next available port from the pool
 func GetPort() int {
 	mutexPortsPool.Lock()
 	defer mutexPortsPool.Unlock()
@@ -193,9 +297,16 @@ func GetPort() int {
 	return -1
 }
 
+// ReleasePort makes the port release to be available
 func ReleasePort(port int) {
 	mutexPortsPool.Lock()
 	defer mutexPortsPool.Unlock()
 
 	pool.ArPorts[port] = 0
+}
+
+// Main function
+func main() {
+	Init()
+	startServer()
 }

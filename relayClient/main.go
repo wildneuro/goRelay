@@ -1,6 +1,8 @@
+// relayClient, for built simplification, this file contains all method and not being split into packages.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -12,10 +14,15 @@ type Config struct {
 	RelayPort int
 }
 
+var (
+	relayHost = flag.String("host", "127.0.0.1", "Relay host")
+	relayPort = flag.Int("port", 10000, "Relay port")
+)
+
 func Init() (error, Config) {
 	c := Config{
-		RelayHost: "127.0.0.1",
-		RelayPort: 10000,
+		RelayHost: *relayHost,
+		RelayPort: *relayPort,
 	}
 
 	return nil, c
@@ -28,14 +35,6 @@ func CheckError(err error) {
 
 	log.Printf("Error occuried: [%v]\n", err)
 	os.Exit(1)
-}
-
-func main() {
-
-	err, c := Init()
-	CheckError(err)
-
-	StartServer(c)
 }
 
 func StartServer(c Config) {
@@ -59,4 +58,12 @@ func StartServer(c Config) {
 		CheckError(errW)
 		log.Printf("Client: [%d] bytes written", w)
 	}
+}
+
+func main() {
+
+	err, c := Init()
+	CheckError(err)
+
+	StartServer(c)
 }
