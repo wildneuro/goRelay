@@ -150,7 +150,6 @@ func routeAll(connServer net.Conn, chanToServer, chanToClient chan []byte, wg *s
 				log.Printf("[%d] \t chanToClient: [%d], connServer.Read: [%d], payload: [%s]", grId, r, r, string(out))
 				chanToClient <- out
 			}
-		default:
 		}
 	}
 	log.Printf("[%d] \t Stopping routeAll loop", grId)
@@ -198,7 +197,6 @@ func routeServerToClient(chanToClient chan []byte, connClient net.Conn, wg *sync
 			} else {
 				log.Printf("[%d] \t %s \t Data sent back to the client : %d", grId, clientAddr, w)
 			}
-		default:
 		}
 	}
 	log.Printf("[%d] \t Stopping routeServerToClient loop", grId)
