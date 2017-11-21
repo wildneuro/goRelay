@@ -93,6 +93,28 @@ func clientServer(connServer net.Conn) {
 	connServer.Close()
 }
 
+func clientHandler(connClient net.Conn, connServer net.Conn) {
+
+	var (
+		wg sync.WaitGroup
+	)
+
+	log.Println("New clientHandler")
+
+	wg.Add(1)
+	go netMixer(connServer, connClient, &wg)
+
+	wg.Add(1)
+	go netMixer(connClient, connServer, &wg)
+
+	wg.Wait()
+
+	connClient.Close()
+
+	return
+}
+
+// Helpers
 func netMixer(conn1 net.Conn, conn2 net.Conn, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -106,25 +128,6 @@ func netMixer(conn1 net.Conn, conn2 net.Conn, wg *sync.WaitGroup) {
 			return
 		}
 	}
-}
-
-func clientHandler(connClient net.Conn, connServer net.Conn) {
-
-	var (
-		wg sync.WaitGroup
-	)
-
-	wg.Add(1)
-	go netMixer(connServer, connClient, &wg)
-
-	wg.Add(1)
-	go netMixer(connClient, connServer, &wg)
-
-	wg.Wait()
-
-	connClient.Close()
-
-	return
 }
 
 func GetNextPort(port int) int {
