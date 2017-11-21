@@ -2,8 +2,10 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -45,18 +47,45 @@ func StartServer(c Config) {
 
 	defer conn.Close()
 
-	log.Println("Client is running...")
-	buf := make([]byte, 1024)
-	for {
-		log.Println("Reading...")
-		r, errR := conn.Read(buf)
-		CheckError(errR)
-		log.Printf("Client: [%d] bytes read", r)
+	input := bufio.NewReader(conn)
+	output := bufio.NewWriter(conn)
 
-		log.Println("Writing...")
-		w, errW := conn.Write(buf)
-		CheckError(errW)
-		log.Printf("Client: [%d] bytes written", w)
+	for {
+		// Reading response from the server, either here or in separate case
+		out := make([]byte, 0, 256)
+		tmp := make([]byte, 1)
+		for {
+			r, e := input.Read(tmp)
+
+			if e != nil {
+				if e == io.EOF {
+					break
+				}
+				log.Printf("network read error: [%v]", e)
+				return
+			}
+			if r <= 0 {
+				break
+			}
+
+			out = append(out, tmp[:r]...)
+			// log.Println("SIZE: ", len(out), "Payload:", string(out))
+
+			bf := input.Buffered()
+			log.Printf("Buffered: %d, read: %d", bf, r)
+
+			if bf <= 0 {
+				break
+			}
+		}
+
+		w, e := output.Write(out)
+		if e != nil || w <= 0 {
+			log.Printf("network write error: [%v]", e)
+			return
+		}
+		log.Printf("Client: [%d] bytes written, payload: [%s]", w, string(out))
+		output.Flush()
 	}
 }
 

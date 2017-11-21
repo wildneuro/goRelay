@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"runtime"
@@ -32,7 +33,7 @@ func Init() {
 	GlobalConfig = Config{
 		ListenHost:    *listenHost,
 		ListenPort:    *listenPort,
-		NetBufferSize: 1024,
+		NetBufferSize: 32,
 		MaxRetries:    5,
 	}
 
@@ -130,26 +131,48 @@ func routeAll(connServer net.Conn, chanToServer, chanToClient chan []byte, wg *s
 	serverAddr := connServer.RemoteAddr().String()
 	grId := getGID()
 
+	input := bufio.NewReaderSize(connServer, GlobalConfig.NetBufferSize)
+	output := bufio.NewWriter(connServer)
+
 	log.Printf("[%d] \t Starting routeAll loop, for addr: [%s]", grId, serverAddr)
 	for {
 		select {
 		case in := <-chanToServer:
-			if w, e := connServer.Write(in); e != nil {
+			if w, e := output.Write(in); e != nil {
 				log.Printf("network write error: [%v]", e)
 				break
 			} else {
+				output.Flush()
 				log.Printf("[%d] \t chanToServer: [%d], connServer.Written: [%d], payload: [%s]", grId, len(in), w, string(in))
 			}
 
 			// Reading response from the server, either here or in separate case
-			out := make([]byte, 1024)
-			if r, e := connServer.Read(out); e != nil {
-				log.Printf("network read error: [%v]", e)
-				break
-			} else {
-				log.Printf("[%d] \t chanToClient: [%d], connServer.Read: [%d], payload: [%s]", grId, r, r, string(out))
-				chanToClient <- out
+			out := make([]byte, 0, 256)
+			tmp := make([]byte, GlobalConfig.NetBufferSize)
+			for {
+				r, e := input.Read(tmp)
+
+				if e != nil {
+					if e == io.EOF {
+						break
+					}
+					log.Printf("network read error: [%v]", e)
+					return
+				}
+				if r <= 0 {
+					log.Printf("[%d] \t ServerToClient Transmission is done, sent: %d", grId, r)
+					break
+				}
+
+				out = append(out, tmp[:r]...)
+				bf := input.Buffered()
+
+				if bf <= 0 {
+					break
+				}
 			}
+			log.Printf("[%d] \t chanToClient: [%d], payload: [%s]", grId, len(out), string(out))
+			chanToClient <- out
 		}
 	}
 	log.Printf("[%d] \t Stopping routeAll loop", grId)
@@ -163,15 +186,37 @@ func routeClientToServer(connClient net.Conn, chanToServer chan []byte, wg *sync
 	clientAddr := connClient.RemoteAddr().String()
 	grId := getGID()
 
-	input := bufio.NewScanner(connClient)
-	// input.Split(bufio.ScanBytes)
+	input := bufio.NewReader(connClient)
 
 	log.Printf("[%d] \t Starting routeClientToServer loop, for addr: [%s]", grId, clientAddr)
-	for input.Scan() {
-		out := input.Bytes()
-		chanToServer <- out
+	for {
+		out := make([]byte, 0, 256)
+		tmp := make([]byte, GlobalConfig.NetBufferSize)
+		for {
+			r, e := input.Read(tmp)
+			if e != nil {
+				if e == io.EOF {
+					break
+				}
+				log.Printf("network read error: [%v]", e)
+				return
+			}
+			if r <= 0 {
+				log.Printf("[%d] \t %s \t ClientToServer Transmission is done, sent: %d", r)
+				break
+			}
+			log.Printf("[%d] \t %s \t Read bytes: %d", grId, clientAddr, r)
 
-		log.Printf("[%d] \t %s \t Data enqueued to channel: %d \t Payload: [%s]", grId, clientAddr, len(out), string(out))
+			out = append(out, tmp[:r]...)
+			bf := input.Buffered()
+
+			if bf <= 0 {
+				break
+			}
+		}
+		chanToServer <- out
+		log.Printf("[%d] \t %s \t Data read and sent to channel: %d bytes \t Payload: [%s]", grId, clientAddr, len(out), string(out))
+		// chanToServer <- out
 	}
 
 	log.Printf("[%d] \t Stopping routeClientToServer loop", grId)
